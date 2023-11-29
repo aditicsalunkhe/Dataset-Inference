@@ -2,28 +2,27 @@ from funcs import *
 import params
 import sys, time, argparse, params, glob, os, json
 import torch
-from wideresnet import *
 from train import epoch_test
 from attacks import *
 import time
+from cnn import *
 
 def get_student_teacher(args):
     mode = args.mode
-    deep_full = 28
-    deep_half = 16
 
-    # Here, the attack model is - Model Distillation Attack - where adversary has commplete access
-    # to victim's private training data. So, we skip training the teacher model and directly proceed
-    # with the training of student model.
+    # Here, if we are generating features for teacher(victim) model, student becomes teacher and teacher is None.
+    # When student(adversary) model is trained, teacher is anyways None.
+    teacher = None
 
-    if mode == 'teacher':
-        teacher = None
-        # python generate_features.py --feature_type rand --dataset SVHN --batch_size 500 --mode teacher --normalize 1 --model_id teacher_normalized
-        # python generate_features.py --batch_size 500 --mode teacher --normalize 0 --model_id teacher_unnormalized --dataset CIFAR10
-        # python generate_features.py --batch_size 500 --mode teacher --normalize 1 --model_id teacher_normalized --dataset CIFAR10
-        student =  WideResNet(n_classes = args.num_classes, depth=deep_full, widen_factor=10, normalize = args.normalize, dropRate = 0.3)
+    if mode in ['distillation', 'independent']:
+        # python generate_features.py --batch_size 500 --mode distillation --normalize 1 --model_id distillation_normalized
+        student =  CNN(layer_num=4)
+
+    else:
+        # Executed for teacher(victim) model
+        # python generate_features.py --batch_size 1000 --mode teacher 
+        student =  CNN(layer_num=8)
         
-        #Alternate student models: [lr_max = 0.01, epochs = 100], [preactresnet], [dropRate]
     return student, teacher
 
 def get_mingd_vulnerability(args, loader, model, num_images = 1000):
@@ -32,11 +31,6 @@ def get_mingd_vulnerability(args, loader, model, num_images = 1000):
     lp_dist = [[],[],[]]
     ex_skipped = 0
     for i,batch in enumerate(loader):
-        if args.regressor_embed == 1: ##We need an extra set of `distinct images for training the confidence regressor
-            if(ex_skipped < num_images):
-                y = batch[1]
-                ex_skipped += y.shape[0]
-                continue
         for j,distance in enumerate(["linf", "l2", "l1"]):
             temp_list = []
             for target_i in range(args.num_classes):
@@ -60,15 +54,16 @@ def get_mingd_vulnerability(args, loader, model, num_images = 1000):
         
     return full_d
 
+
 def feature_extractor(args):
-    train_loader, test_loader = get_dataloaders(args.dataset, args.batch_size)
-    student, _ = get_student_teacher(args) #teacher is not needed
+    train_loader, test_loader = get_dataloaders(args.dataset, args.batch_size, args.student_or_teacher)
+    student, _ = get_student_teacher(args) 
     location = f"{args.model_dir}/final.pt"
     try:
         student = student.to(args.device)
         student.load_state_dict(torch.load(location, map_location = args.device)) 
     except:
-        # student = nn.DataParallel(student).to(args.device)
+        student = nn.DataParallel(student).to(args.device)
         student.load_state_dict(torch.load(location, map_location = args.device))
 
     student.eval()
@@ -77,31 +72,42 @@ def feature_extractor(args):
     _, test_acc   = epoch_test(args, test_loader, student, stop = True)
     print(f'Model: {args.model_dir} | \t Test Acc: {test_acc:.3f}')
 
-    test_d = get_mingd_vulnerability(args, test_loader, student, 750)
-    torch.save(test_d, f"{args.file_dir}/test_{args.feature_type}_vulnerability_2.pt")
+    test_d = get_mingd_vulnerability(args, test_loader, student)
+    torch.save(test_d, f"{args.file_dir}/test_mingd_vulnerability_2.pt")
 
-    train_d = func(args, train_loader, student)
-    torch.save(train_d, f"{args.file_dir}/train_{args.feature_type}_vulnerability_2.pt")
+    train_d = get_mingd_vulnerability(args, train_loader, student)
+    torch.save(train_d, f"{args.file_dir}/train_mingd_vulnerability_2.pt")
 
 
 if __name__ == "__main__":
     parser = params.parse_args()
     args = parser.parse_args()
     print(args.__dict__)
-    model_dir = f"models/{args.dataset}"
-    print("Model Directory:", model_dir)
+
+    device = 'cpu'
+    args.device = device
+
+    # Check if a teacher(victim) model is trained or student(adversary) model is trained, and change directory structure accordingly
+    if args.student_or_teacher == 'teacher':
+        model_dir = f"models/{args.dataset}/teacher"
+    else:
+        model_dir = f"models/{args.dataset}/student"
     args.model_dir = model_dir
-    file_dir = f"files/{args.dataset}"
-    print("File Directory:", file_dir)
+
+    # Check if generated features are for teacher(victim) model or student(adversary) model, and change directory structure accordingly
+    if args.student_or_teacher == 'teacher':
+        file_dir = f"files/{args.dataset}/teacher"
+    else:
+        file_dir = f"files/{args.dataset}/student"
     args.file_dir = file_dir
-    if(not os.path.exists(file_dir)):
-        os.makedirs(file_dir)
+    print("File Directory:", file_dir)
+
     with open(f"{model_dir}/model_info.txt", "w") as f:
             json.dump(args.__dict__, f, indent=2)
     args.device = 'cpu'
     torch.manual_seed(args.seed)
 
-    n_class = {"CIFAR10":10}
+    n_class = {"MNIST":10}
     args.num_classes = n_class[args.dataset]
     
     feature_extractor(args)

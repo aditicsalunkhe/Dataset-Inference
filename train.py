@@ -1,6 +1,6 @@
 import params
 from funcs import *
-from wideresnet import *
+from cnn import *
 import numpy as np
 import argparse
 import os
@@ -41,48 +41,47 @@ def epoch(args, loader, model, teacher = None, lr_schedule = None, epoch_i = Non
         
     return train_loss / train_n, train_acc / train_n
 
-def epoch_test(args, loader, model, stop = False):
-    """Evaluation epoch over the dataset"""
-    test_loss = 0; test_acc = 0; test_n = 0
-    func = lambda x:x
-    with torch.no_grad():
-        for batch in func(loader):
-            X,y = batch[0].to('cpu'), batch[1].to('cpu')
-            yp = model(X)
-            loss = nn.CrossEntropyLoss()(yp,y)
-            test_loss += loss.item()*y.size(0)
-            test_acc += (yp.max(1)[1] == y).sum().item()
-            test_n += y.size(0)
-            if stop:
-                break
-    return test_loss / test_n, test_acc / test_n        
-
-
-
 
 def get_student_teacher(args):
     mode = args.mode
-    deep_full = 28
-    deep_half = 16
 
-    # Here, the attack model is - Model Distillation Attack - where adversary has commplete access
-    # to victim's private training data. So, we skip training the teacher model and directly proceed
-    # with the training of student model.
+    # If you're training a teacher(victim) model, then the model named 'student', trained below is actually your victim model. In this case, teacher = None
+    # If you're training a student(adversary) model, then you must've already trained the victim model and it should be placed in /models/dataset/teacher/ 
+    # as final.pt
 
+    # Executed for teacher(victim) model
     if mode == 'teacher':
-        teacher = None
+        teacher = None # Student becomes teacher
 
-    # python train.py --batch_size 256 --mode teacher --normalize 0 --model_id teacher_unnormalized --lr_mode 2 --epochs 100 --dataset CIFAR10 --dropRate 0.3
-    # python train.py --batch_size 256 --mode teacher --normalize 1 --model_id teacher_normalized --lr_mode 2 --epochs 100 --dataset CIFAR10 --dropRate 0.3
-    student =  WideResNet(n_classes = args.num_classes, depth=deep_full, widen_factor=10, normalize = args.normalize, dropRate = 0.3)
-    # student = nn.DataParallel(student).to('cpu')
-    student.train()
+    # Executed for student(adversary) model
+    else:
+        teacher = CNN(layer_num=8)
+        teacher = nn.DataParallel(teacher).to(args.device)
+        path = f"{args.model_dir}/final"
+        teacher = load(teacher,path)
+        teacher.eval()
+
+    # Executed for student(adversary) model
+    if mode in ["distillation", "independent"]:
+        # python train.py --batch_size 1000 --mode distillation --epochs 4 --dataset MNIST
+        student =  CNN(layer_num=4)
+        student = nn.DataParallel(student).to(args.device)
+        student.train()
+
+    # Executed for teacher(victim) model
+    else:
+        # python train.py --batch_size 1000 --mode teacher --epochs 10 --dataset MNIST
+        student = CNN(layer_num=8)
+        student = nn.DataParallel(student).to(args.device)
+        student.train()
 
     return student, teacher
 
 
 def trainer(args):
-    train_loader, test_loader = get_dataloaders(args.dataset, args.batch_size)
+    train_loader, test_loader = get_dataloaders(args.dataset, args.batch_size, args.student_or_teacher)
+    if args.mode == "independent":
+        train_loader, test_loader = test_loader, train_loader
 
     def myprint(a):
         print(a); file.write(a); file.write("\n"); file.flush()
@@ -95,7 +94,7 @@ def trainer(args):
     else:
         optim.Adam(student.parameters(), lr=0.1)
 
-    lr_schedule = lambda t: np.interp([t], [0, args.epochs//2, args.epochs], [args.lr_min, args.lr_max, args.lr_min])[0]
+    lr_schedule = lambda t: np.interp([t], [0, args.epochs*2//5, args.epochs*4//5, args.epochs], [args.lr_min, args.lr_max, args.lr_max/10, args.lr_min])[0]
     t_start = 0
 
     for t in range(t_start, args.epochs):  
@@ -104,26 +103,34 @@ def trainer(args):
         train_loss, train_acc = epoch(args, train_loader, student, teacher = teacher, lr_schedule = lr_schedule, epoch_i = t, opt = opt)
         student.eval()
         test_loss, test_acc   = epoch_test(args, test_loader, student)
-        myprint(f'Epoch: {t}, Train Loss: {train_loss:.3f} Train Acc: {train_acc:.3f} Test Acc: {test_acc:.3f}, lr: {lr:.5f}')    
-        
-        if (t+1)%25 == 0:
+        myprint(f'Epoch: {t}, Train Loss: {train_loss:.3f} Train Acc: {train_acc:.3f} Test Acc: {test_acc:.3f}, lr: {lr:.5f}')   
+
+        if args.dataset == "MNIST":
             torch.save(student.state_dict(), f"{args.model_dir}/iter_{t}.pt")
 
     torch.save(student.state_dict(), f"{args.model_dir}/final.pt")
-
-
-
 
 if __name__ == "__main__":
     parser = params.parse_args()
     args = parser.parse_args()
     print(args.__dict__)
-    model_dir = f"models/{args.dataset}"
+    device = 'cpu'
+    args.device = device
+
+    # Check if a teacher(victim) model is trained or student(adversary) model is trained, and change directory structure accordingly
+    if args.student_or_teacher == 'teacher':
+        model_dir = f"models/{args.dataset}/teacher"
+    else:
+        model_dir = f"models/{args.dataset}/student"
     if(not os.path.exists(model_dir)):
         os.makedirs(model_dir)
     args.model_dir = model_dir
+
     with open(f"{model_dir}/model_info.txt", "w") as f:
         json.dump(args.__dict__, f, indent=2)
-    n_class = {"CIFAR10":10}
+    
+    # If you're using any other dataset, please add the number of classes to the following n_class dictionary
+    # and add it to the choices parameter in params.py
+    n_class = {"MNIST":10}
     args.num_classes = n_class[args.dataset]
     trainer(args)

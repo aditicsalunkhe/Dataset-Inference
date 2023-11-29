@@ -32,6 +32,32 @@ def loss_mingd(preds, target):
     assert(loss >= 0)
     return loss
 
+def kthlargest(tensor, k, dim=-1):
+    val, idx = tensor.topk(k, dim = dim)
+    return val[:,:,-1], idx[:,:,-1]
+
+def l1_dir_topk(grad, delta, X, gap, k = 10) :
+    #Check which all directions can still be increased such that
+    #they haven't been clipped already and have scope of increasing
+    # ipdb.set_trace()
+    X_curr = X + delta
+    batch_size = X.shape[0]
+    channels = X.shape[1]
+    pix = X.shape[2]
+    # print (batch_size)
+    neg1 = (grad < 0)*(X_curr <= gap)
+    neg2 = (grad > 0)*(X_curr >= 1-gap)
+    neg3 = X_curr <= 0
+    neg4 = X_curr >= 1
+    neg = neg1 + neg2 + neg3 + neg4
+    u = neg.view(batch_size,1,-1)
+    grad_check = grad.view(batch_size,1,-1)
+    grad_check[u] = 0
+
+    kval = kthlargest(grad_check.abs().float(), k, dim = 2)[0].unsqueeze(1)
+    k_hot = (grad_check.abs() >= kval).float() * grad_check.sign()
+    return k_hot.view(batch_size, channels, pix, pix)
+
 def mingd(model, X, y, args, target):
     start = time.time()
     is_training = model.training

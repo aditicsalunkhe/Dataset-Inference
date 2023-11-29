@@ -1,25 +1,55 @@
 import torchvision
+import torch
+import torch.nn as nn
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Dataset, Subset
 
 
-def get_dataloaders(dataset, batch_size, normalize = False, train_shuffle = True):
-    if dataset == "CIFAR10":
-        data_source = datasets.CIFAR10
-        tr_normalize = transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2471, 0.2435, 0.2616)) if normalize else transforms.Lambda(lambda x: x)
-        transform_train = transforms.Compose([transforms.RandomCrop(32, padding=4),
-                                    transforms.RandomHorizontalFlip(),
-                                    transforms.ToTensor(), tr_normalize,
-                                    transforms.Lambda(lambda x: x.float())])
-        transform_test = transforms.Compose([transforms.ToTensor(), tr_normalize, transforms.Lambda(lambda x: x.float())])
-        if not train_shuffle:
-            transform_train = transform_test
-        
-        train = data_source("data", train=True, download=True, transform=transform_train)
-        test = data_source("data", train=False, download=True, transform=transform_test)
-        train_subset = Subset(train, range(0, 3000))
-        test_subset = Subset(test, range(0, 750))
-        train_loader = DataLoader(train_subset, batch_size = batch_size, shuffle=train_shuffle)
-        test_loader = DataLoader(test_subset, batch_size = batch_size, shuffle=False)
+
+def get_dataloaders(dataset, batch_size, student_or_teacher):
+    # For any new dataset that you are using, add the normalize mean and standard deviation parameters for the dataset
+    if dataset == "MNIST":
+        tr_normalize = transforms.Normalize((0.1307,), (0.3081,))
+    
+    transform_train = transforms.Compose([transforms.ToTensor(), tr_normalize])
+    transform_test = transforms.Compose([transforms.ToTensor(), tr_normalize]) 
+    mnist_train = datasets.MNIST("data", train=True, download=True, transform=transform_train)
+    mnist_test = datasets.MNIST("data", train=False, download=True, transform=transform_test)
+    if student_or_teacher == 'student':
+        mnist_train = Subset(mnist_train, range(len(mnist_train)//4))
+        mnist_test = Subset(mnist_test, range(len(mnist_test)//4))
+    train_loader = DataLoader(mnist_train, batch_size = batch_size, shuffle=True)
+    test_loader = DataLoader(mnist_test, batch_size = batch_size, shuffle=False)
 
     return train_loader, test_loader
+
+def load(model, model_name):
+    try:
+        model.load_state_dict(torch.load(f"{model_name}.pt"))
+    except:
+        dictionary = torch.load(f"{model_name}.pt")['state_dict']
+        new_dict = {}
+        for key in dictionary.keys():
+            new_key = key[7:]
+            if new_key.split(".")[0] == "sub_block1":
+                continue
+            new_dict[new_key] = dictionary[key]
+        model.load_state_dict(new_dict)
+    return model
+
+
+def epoch_test(args, loader, model, stop = False):
+    """Evaluation epoch over the dataset"""
+    test_loss = 0; test_acc = 0; test_n = 0
+    func = lambda x:x
+    with torch.no_grad():
+        for batch in func(loader):
+            X,y = batch[0].to('cpu'), batch[1].to('cpu')
+            yp = model(X)
+            loss = nn.CrossEntropyLoss()(yp,y)
+            test_loss += loss.item()*y.size(0)
+            test_acc += (yp.max(1)[1] == y).sum().item()
+            test_n += y.size(0)
+            if stop:
+                break
+    return test_loss / test_n, test_acc / test_n        
