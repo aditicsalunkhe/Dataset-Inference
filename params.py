@@ -13,7 +13,7 @@ def parse_args():
 
     # Threat models    
     parser.add_argument("--mode", help = "Threat Models. For training(or generating features for) teacher(victim) model, use 'teacher', for student(adversary) model, use one of ['distillation', 'independent]"
-                        , type = str, default = 'distillation', choices = ['teacher', 'distillation', 'independent'])
+                        , type = str, default = 'teacher', choices = ['teacher', 'distillation', 'independent'])
 
     # LR
     parser.add_argument("--opt_type", help = "Optimizer", type = str, default = "SGD")

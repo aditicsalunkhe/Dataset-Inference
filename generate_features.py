@@ -89,18 +89,20 @@ if __name__ == "__main__":
 
     # Check if a teacher(victim) model is trained or student(adversary) model is trained, and change directory structure accordingly
     if args.student_or_teacher == 'teacher':
-        model_dir = f"models/{args.dataset}/teacher"
+        model_dir = f"models/{args.dataset}/{args.mode}"
     else:
-        model_dir = f"models/{args.dataset}/student"
+        model_dir = f"models/{args.dataset}/{args.mode}"
     args.model_dir = model_dir
 
     # Check if generated features are for teacher(victim) model or student(adversary) model, and change directory structure accordingly
     if args.student_or_teacher == 'teacher':
-        file_dir = f"files/{args.dataset}/teacher"
+        file_dir = f"files/{args.dataset}/{args.mode}"
     else:
-        file_dir = f"files/{args.dataset}/student"
+        file_dir = f"files/{args.dataset}/{args.mode}"
     args.file_dir = file_dir
     print("File Directory:", file_dir)
+    if(not os.path.exists(file_dir)):
+        os.makedirs(file_dir)
 
     with open(f"{model_dir}/model_info.txt", "w") as f:
             json.dump(args.__dict__, f, indent=2)

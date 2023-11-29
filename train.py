@@ -57,7 +57,7 @@ def get_student_teacher(args):
     else:
         teacher = CNN(layer_num=8)
         teacher = nn.DataParallel(teacher).to(args.device)
-        path = f"{args.model_dir}/final"
+        path = f"models/{args.dataset}/teacher/final"
         teacher = load(teacher,path)
         teacher.eval()
 
@@ -119,9 +119,11 @@ if __name__ == "__main__":
 
     # Check if a teacher(victim) model is trained or student(adversary) model is trained, and change directory structure accordingly
     if args.student_or_teacher == 'teacher':
-        model_dir = f"models/{args.dataset}/teacher"
+        model_dir = f"models/{args.dataset}/{args.mode}"
     else:
-        model_dir = f"models/{args.dataset}/student"
+        model_dir = f"models/{args.dataset}/{args.mode}"
+
+    print(model_dir)
     if(not os.path.exists(model_dir)):
         os.makedirs(model_dir)
     args.model_dir = model_dir
